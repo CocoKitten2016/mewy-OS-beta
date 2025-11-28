@@ -1,11 +1,15 @@
 namespace SpriteKind {
     export const Wall = SpriteKind.create()
+    export const EnemyBullet = SpriteKind.create()
 }
 /**
- * ---------- prevent walking through walls ----------
+ * ---------- GLOBALS ----------
  */
 /**
- * ---------- end of file ----------
+ * prev positions for wall collision revert
+ */
+/**
+ * store previous enemy pos for maze-shooter collision
  */
 // ---------- INPUT: menu navigation + unified A handler ----------
 controller.up.onEvent(ControllerButtonEvent.Pressed, function () {
@@ -15,15 +19,16 @@ controller.up.onEvent(ControllerButtonEvent.Pressed, function () {
     selected = (selected - 1 + menuItems.length) % menuItems.length
     drawMenu()
 })
-// convert grid (r,c) to pixel center
+// ---------- GRID UTILS ----------
 function gridToPixel (c: number, r: number) {
+    // compute locally so no hidden globals required
     totalW = gridCols * CELL
     totalH = gridRows * CELL
-    offsetX = Math.floor((160 - totalW) / 2)
-    offsetY = Math.floor((120 - totalH) / 2)
-    px = offsetX + c * CELL + Math.floor(CELL / 2)
-    py = offsetY + r * CELL + Math.floor(CELL / 2)
-    return [px, py]
+    offsetXLocal = Math.floor((160 - totalW) / 2)
+    offsetYLocal = Math.floor((120 - totalH) / 2)
+    pxLocal = offsetXLocal + c * CELL + Math.floor(CELL / 2)
+    pyLocal = offsetYLocal + r * CELL + Math.floor(CELL / 2)
+    return [pxLocal, pyLocal]
 }
 controller.B.onEvent(ControllerButtonEvent.Pressed, function () {
     // back to menu from any game
@@ -39,18 +44,16 @@ function initMazeGrid () {
     for (let r = 0; r <= gridRows - 1; r++) {
         mazeGrid[r] = []
         for (let c = 0; c <= gridCols - 1; c++) {
-            // wall
-            // wall
             mazeGrid[r][c] = 0
         }
     }
 }
-// ---------- SHOOTER: start ----------
+// ---------- SHOOTER ----------
 function startShooter () {
     destroyAllKinds()
     currentApp = App.Shooter
 scene.setBackgroundColor(7)
-    info.setScore(100)
+    info.setScore(0)
     info.setLife(3)
     shooterEnemyHP = 3
     shooterPlayer = sprites.create(img`
@@ -70,15 +73,22 @@ scene.setBackgroundColor(7)
         `, SpriteKind.Enemy)
     shooterEnemy.setPosition(140, 60)
 }
+// player touches enemy
 sprites.onOverlap(SpriteKind.Player, SpriteKind.Enemy, function (pl, en) {
-    if (currentApp != App.Shooter) {
-        return
-    }
-    info.changeLifeBy(-1)
-    scene.cameraShake(4, 200)
-    pause(300)
-    if (info.life() <= 0) {
-        game.over(false)
+    if (currentApp == App.Shooter) {
+        info.changeLifeBy(-1)
+        scene.cameraShake(4, 200)
+        pause(300)
+        if (info.life() <= 0) {
+            game.over(false)
+        }
+    } else if (currentApp == App.ShooterMaze) {
+        info.changeLifeBy(-1)
+        scene.cameraShake(4, 200)
+        pause(300)
+        if (info.life() <= 0) {
+            game.over(false)
+        }
     }
 })
 // SINGLE A handler (menu select, shooter shoot, maze no-op)
@@ -91,6 +101,10 @@ controller.A.onEvent(ControllerButtonEvent.Pressed, function () {
             return
         } else if (selected == 1) {
             startMaze()
+            return
+        } else if (selected == 2) {
+            // start the new maze shooter mode
+            startMazeShooter()
             return
         } else {
             currentApp = App.ComingSoon
@@ -108,27 +122,31 @@ return
         `, shooterPlayer, 160, 0)
 return
     }
+    // MAZE SHOOTER shooting (player shoots forward)
+    if (currentApp == App.ShooterMaze) {
+        info.changeScoreBy(-1)
+        sprites.createProjectileFromSprite(img`
+            . 1 .
+            1 1 1
+            . 1 .
+        `, mazeShooterPlayer, 0, -120)
+return
+    }
 })
 function spawnMazeSprites () {
-    // destroy old walls
     for (let w of mazeWalls) {
         w.destroy()
     }
     mazeWalls = []
-    for (let t = 0; t <= gridRows - 1; t++) {
-        for (let e = 0; e <= gridCols - 1; e++) {
-            if (mazeGrid[t][e] == 0) {
-                pos = gridToPixel(e, t)
-                wall = sprites.create(image.create(CELL, CELL), SpriteKind.Wall)
-                // fill wall image
-                for (let yy = 0; yy <= CELL - 1; yy++) {
-                    for (let xx = 0; xx <= CELL - 1; xx++) {
-                        wall.image.setPixel(xx, yy, 8)
-                    }
-                }
-                wall.setPosition(pos[0], pos[1])
-                wall.setFlag(SpriteFlag.Ghost, false)
-                mazeWalls.push(wall)
+    for (let u = 0; u <= gridRows - 1; u++) {
+        for (let f = 0; f <= gridCols - 1; f++) {
+            if (mazeGrid[u][f] == 0) {
+                p = gridToPixel(f, u)
+                wallSprite = sprites.create(image.create(CELL, CELL), SpriteKind.Wall)
+                wallSprite.image.fill(8)
+                wallSprite.setPosition(p[0], p[1])
+                wallSprite.setFlag(SpriteFlag.Ghost, false)
+                mazeWalls.push(wallSprite)
             }
         }
     }
@@ -140,68 +158,109 @@ controller.down.onEvent(ControllerButtonEvent.Pressed, function () {
     selected = (selected + 1) % menuItems.length
     drawMenu()
 })
+// ---------- SHOOTER MAZE (ADDED) ----------
+function startMazeShooter () {
+    destroyAllKinds()
+    currentApp = App.ShooterMaze
+scene.setBackgroundColor(6)
+    info.setScore(0)
+    info.setLife(5)
+    mazeShooterEnemyHP = 3
+    carveMaze()
+    spawnMazeSprites()
+    // player in maze shooter
+    q = gridToPixel(1, 1)
+    mazeShooterPlayer = sprites.create(img`
+        . 4 4 . 
+        4 4 4 4 
+        4 4 4 4 
+        . 4 4 . 
+        `, SpriteKind.Player)
+    mazeShooterPlayer.setPosition(q[0], q[1])
+    controller.moveSprite(mazeShooterPlayer, 80, 80)
+    mazeShooterPlayer.setStayInScreen(true)
+    prevX = mazeShooterPlayer.x
+    prevY = mazeShooterPlayer.y
+    // enemy in maze shooter
+    ePos = gridToPixel(gridCols - 2, gridRows - 2)
+    mazeShooterEnemy = sprites.create(img`
+        . 2 2 . 
+        2 2 2 2 
+        2 2 2 2 
+        . 2 2 . 
+        `, SpriteKind.Enemy)
+    mazeShooterEnemy.setPosition(ePos[0], ePos[1])
+    mazeShooterEnemyHP = 3
+    // store enemy previous for wall collision
+    mazeShooterPrevEnemyX = mazeShooterEnemy.x
+    mazeShooterPrevEnemyY = mazeShooterEnemy.y
+}
+// ---------- collisions ----------
 sprites.onOverlap(SpriteKind.Projectile, SpriteKind.Player, function (proj, pl) {
-    if (currentApp != App.Shooter) {
-        return
-    }
-    proj.destroy()
-    info.changeLifeBy(-1)
-    if (info.life() <= 0) {
-        game.over(false)
+    // projectile hitting player (enemy bullet)
+    if (currentApp == App.ShooterMaze) {
+        proj.destroy()
+        info.changeLifeBy(-1)
+        if (info.life() <= 0) {
+            game.over(false)
+        }
+    } else if (currentApp == App.Shooter) {
+        // shots shouldn't hurt player in simple shooter but keep existing behavior if any
+        proj.destroy()
+        info.changeLifeBy(-1)
+        if (info.life() <= 0) {
+            game.over(false)
+        }
     }
 })
-// ---------- CLEANUP helpers ----------
+// ---------- HELPERS ----------
 function destroyAllKinds () {
     sprites.destroyAllSpritesOfKind(SpriteKind.Player)
     sprites.destroyAllSpritesOfKind(SpriteKind.Enemy)
     sprites.destroyAllSpritesOfKind(SpriteKind.Projectile)
     sprites.destroyAllSpritesOfKind(SpriteKind.Food)
     sprites.destroyAllSpritesOfKind(SpriteKind.Wall)
+    sprites.destroyAllSpritesOfKind(SpriteKind.EnemyBullet)
 }
-// start at (1,1)
 function carveMaze () {
     let stack: number[][] = []
     initMazeGrid()
-    sr = 1
-    sc = 1
-    mazeGrid[sr][sc] = 1
-    stack.push([sr, sc])
+    rr = 1
+    cc = 1
+    mazeGrid[rr][cc] = 1
+    stack.push([rr, cc])
     while (stack.length > 0) {
-        let neighbors: number[][] = []
-        top = stack[stack.length - 1]
-        s = top[0]
-        d = top[1]
-        // Up
-        if (s - 2 > 0 && mazeGrid[s - 2][d] == 0) {
-            neighbors.push([s - 2, d])
+        let neighborsLocal: number[][] = []
+        topLocal = stack[stack.length - 1]
+        t = topLocal[0]
+        e = topLocal[1]
+        if (t - 2 > 0 && mazeGrid[t - 2][e] == 0) {
+            neighborsLocal.push([t - 2, e])
         }
-        // Down
-        if (s + 2 < gridRows && mazeGrid[s + 2][d] == 0) {
-            neighbors.push([s + 2, d])
+        if (t + 2 < gridRows && mazeGrid[t + 2][e] == 0) {
+            neighborsLocal.push([t + 2, e])
         }
-        // Left
-        if (d - 2 > 0 && mazeGrid[s][d - 2] == 0) {
-            neighbors.push([s, d - 2])
+        if (e - 2 > 0 && mazeGrid[t][e - 2] == 0) {
+            neighborsLocal.push([t, e - 2])
         }
-        // Right
-        if (d + 2 < gridCols && mazeGrid[s][d + 2] == 0) {
-            neighbors.push([s, d + 2])
+        if (e + 2 < gridCols && mazeGrid[t][e + 2] == 0) {
+            neighborsLocal.push([t, e + 2])
         }
-        if (neighbors.length > 0) {
-            n = neighbors[randint(0, neighbors.length - 1)]
-            nr = n[0]
-            nc = n[1]
-            let midR = (s + nr) >> 1
-let midC = (d + nc) >> 1
-mazeGrid[midR][midC] = 1
-            mazeGrid[nr][nc] = 1
-            stack.push([nr, nc])
+        if (neighborsLocal.length > 0) {
+            nn = neighborsLocal[randint(0, neighborsLocal.length - 1)]
+            nrLocal = nn[0]
+            ncLocal = nn[1]
+            // remove wall between
+            // remove wall between
+            mazeGrid[(t + nrLocal) >> 1][(e + ncLocal) >> 1] = 1
+            mazeGrid[nrLocal][ncLocal] = 1
+            stack.push([nrLocal, ncLocal])
         } else {
             stack.pop()
         }
     }
 }
-// ---------- collision: player reaches goal ----------
+// player reaches goal in normal maze
 sprites.onOverlap(SpriteKind.Player, SpriteKind.Food, function (sprite, otherSprite) {
     if (currentApp != App.Maze) {
         return
@@ -216,29 +275,40 @@ game.splash("NEW RECORD!")
     currentApp = App.Menu
 drawMenu()
 })
-// shooter collisions
+// projectile hits enemy (player bullet)
 sprites.onOverlap(SpriteKind.Projectile, SpriteKind.Enemy, function (proj, en) {
-    if (currentApp != App.Shooter) {
-        return
-    }
-    proj.destroy()
-    shooterEnemyHP += -1
-    music.zapped.play()
-    // refund
-    info.changeScoreBy(1)
-    if (shooterEnemyHP <= 0) {
-        en.destroy(effects.disintegrate, 300)
-        info.changeScoreBy(10)
-        pause(200)
-        // respawn enemy
-        shooterEnemy = sprites.create(img`
-            . 2 2 . 
-            2 2 2 2 
-            2 2 2 2 
-            . 2 2 . 
-            `, SpriteKind.Enemy)
-        shooterEnemy.setPosition(140, randint(20, 100))
-        shooterEnemyHP = 3
+    if (currentApp == App.Shooter) {
+        proj.destroy()
+        shooterEnemyHP += -1
+        music.pewPew.play()
+        // refund
+        info.changeScoreBy(1)
+        if (shooterEnemyHP <= 0) {
+            en.destroy(effects.disintegrate, 300)
+            info.changeScoreBy(10)
+            pause(200)
+            // respawn enemy
+            shooterEnemy = sprites.create(img`
+                . 2 2 . 
+                2 2 2 2 
+                2 2 2 2 
+                . 2 2 . 
+                `, SpriteKind.Enemy)
+            shooterEnemy.setPosition(140, randint(20, 100))
+            shooterEnemyHP = 3
+        }
+    } else if (currentApp == App.ShooterMaze) {
+        // projectile from player hits maze-shooter enemy
+        proj.destroy()
+        mazeShooterEnemyHP += -1
+        music.pewPew.play()
+        if (mazeShooterEnemyHP <= 0) {
+            en.destroy(effects.disintegrate, 300)
+            game.splash("YOU WIN!")
+            destroyAllKinds()
+            currentApp = App.Menu
+drawMenu()
+        }
     }
 })
 // ---------- START MAZE ----------
@@ -278,29 +348,81 @@ scene.setBackgroundColor(6)
     prevX = mazePlayer.x
     prevY = mazePlayer.y
 }
-// ---------- MENU ----------
+// ---------- MENU DRAW ----------
 function drawMenu () {
     scene.setBackgroundColor(9)
     screen.fill(9)
     screen.printCenter("MEWY OS", 10, 1)
 for (let i = 0; i <= menuItems.length - 1; i++) {
-        y = 40 + i * 18
+        yy = 40 + i * 18
         if (i == selected) {
             // red selection rectangle (stroke)
-            screen.drawRect(18, y - 4, 124, 16, 2)
+            screen.drawRect(18, yy - 4, 124, 16, 2)
         }
-        screen.print(menuItems[i], 30, y, 1)
+        screen.print(menuItems[i], 30, yy, 1)
     }
     screen.printCenter("A = Select   B = Back", 110, 1)
-screen.printCenter("BEST MAZE: " + mazeBest + "s", 100, 1)
+// ONLY print BEST MAZE if it's a valid number (prevents "undefined")
+    if (mazeBest != null && !(isNaN(mazeBest))) {
+        screen.printCenter("BEST MAZE: " + mazeBest + "s", 100, 1)
+    }
 }
-let y = 0
-let prevY = 0
-let prevX = 0
+// enemy bullet hits player
+sprites.onOverlap(SpriteKind.EnemyBullet, SpriteKind.Player, function (b, pl) {
+    if (currentApp != App.ShooterMaze) {
+        return
+    }
+    b.destroy()
+    info.changeLifeBy(-1)
+    scene.cameraShake(3, 200)
+    if (info.life() <= 0) {
+        game.over(false)
+    }
+})
+let nonzero = 0
+let projs: Sprite[] = []
+let h: Sprite = null
+let vy = 0
+let vx = 0
+let speed = 0
+let mag = 0
+let dy = 0
+let dx = 0
+let yy = 0
 let exitPos: number[] = []
 let exitC = 0
 let exitR = 0
 let startPos: number[] = []
+let ncLocal = 0
+let nrLocal = 0
+let nn: number[] = []
+let e = 0
+let t = 0
+let topLocal: number[] = []
+let cc = 0
+let rr = 0
+let mazeShooterPrevEnemyY = 0
+let mazeShooterPrevEnemyX = 0
+let ePos: number[] = []
+let prevY = 0
+let prevX = 0
+let q: number[] = []
+let wallSprite: Sprite = null
+let p: number[] = []
+let mazeWalls: Sprite[] = []
+let mazeGrid: number[][] = []
+let pyLocal = 0
+let pxLocal = 0
+let offsetYLocal = 0
+let offsetXLocal = 0
+let totalH = 0
+let totalW = 0
+let selected = 0
+let gridRows = 0
+let gridCols = 0
+let CELL = 0
+let wall = null
+let pos: number[] = []
 let nc = 0
 let nr = 0
 let n: number[] = []
@@ -308,67 +430,87 @@ let d = 0
 let s = 0
 let top: number[] = []
 let sc = 0
+// some temporaries used in functions (kept to avoid missing-name errors)
 let sr = 0
-let wall: Sprite = null
-let pos: number[] = []
-let mazeWalls: Sprite[] = []
-let mazeGrid: number[][] = []
-let py = 0
-let px = 0
-let offsetY = 0
-let offsetX = 0
-let totalH = 0
-let totalW = 0
-let selected = 0
-let gridRows = 0
-let gridCols = 0
-let CELL = 0
+let mazeShooterEnemyHP = 0
+let mazeShooterEnemy: Sprite = null
+// maze-shooter globals (ADDED)
+let mazeShooterPlayer: Sprite = null
 let shooterEnemyHP = 0
-let menuItems: string[] = []
+let shooterEnemy: Sprite = null
+// shooter globals (existing)
+let shooterPlayer: Sprite = null
 let mazeTimer = 0
 let mazeGoal: Sprite = null
-// --- global vars for maze ---
 let mazePlayer: Sprite = null
-let shooterEnemy: Sprite = null
-// --- global vars for shooter ---
-let shooterPlayer: Sprite = null
+let menuItems: string[] = []
+CELL = 6
+let MAZE_CELLS_X = 11
+let MAZE_CELLS_Y = 7
+gridCols = MAZE_CELLS_X * 2 + 1
+gridRows = MAZE_CELLS_Y * 2 + 1
+let mazeBest = settings.readNumber("mazeBest")
+if (mazeBest == 0) {
+    mazeBest = 9999
+}
 enum App {
     Boot,
     Menu,
     Shooter,
     Maze,
+    ShooterMaze,
     ComingSoon
 }
 let currentApp = App.Boot
-menuItems = ["Shooter", "Maze", "Coming Soon"]
-shooterEnemyHP = 3
-let mazeBest = settings.readNumber("mazeBest")
-if (mazeBest == 0) {
-    mazeBest = 9999
-}
-// Maze grid parameters (odd-grid carving)
-// number of cell columns (odd carving grid will be 2*MAZE_CELLS_X+1)
-let MAZE_CELLS_X = 11
-let MAZE_CELLS_Y = 7
-// pixel size per grid cell (small so fits 160x120)
-CELL = 6
-gridCols = MAZE_CELLS_X * 2 + 1
-gridRows = MAZE_CELLS_Y * 2 + 1
-// 0 = wall, 1 = path
-// ---------- BOOT ----------
+// ---------- BOOT (kept exactly like yours) ----------
 scene.setBackgroundColor(1)
 let logo = sprites.create(img`
-    . . . . . . . 
-    . 5 5 . 5 5 . 
-    . 5 . 5 . 5 . 
-    . 5 5 . 5 5 . 
-    . . . . . . . 
+    . . f f . . . . . . . . . f f . . 
+    . . f 1 f . . . . . . . f 1 f . . 
+    . . f 1 1 f . . . . . f 1 1 f . . 
+    . . f 1 1 1 f f f f f 1 1 1 f . . 
+    . . f 1 1 1 1 1 1 1 1 1 1 1 f . . 
+    . f 1 1 1 1 1 1 1 1 1 1 1 1 1 f . 
+    . f 1 1 f 9 1 1 1 1 1 f 9 1 1 f . 
+    . f 1 1 f 9 1 1 1 1 1 f 9 1 1 f . 
+    . f 1 1 1 1 1 1 1 1 1 1 1 1 1 f . 
+    . f 1 1 1 1 1 1 3 1 1 1 1 1 1 f . 
+    . . f 1 1 1 1 1 1 1 1 1 1 1 f . . 
+    . . . f 1 1 1 1 1 1 1 1 1 f . . . 
+    . . . . f f f f f f f f f . . . . 
     `, SpriteKind.Player)
 logo.setPosition(80, 50)
 logo.say("Mewy OS", 1200)
+let mySprite = sprites.create(img`
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    . . . . . . . . . . . . . . . . 
+    `, SpriteKind.Player)
+mySprite.setPosition(80, 100)
+mySprite.sayText("Powerd By: CocoKitten2016", 1200, false)
 music.powerUp.play()
 pause(1300)
+sprites.destroy(mySprite)
 logo.destroy()
+// menu setup (kept/updated)
+menuItems = [
+"Shooter",
+"Maze",
+"Maze Shooter",
+"Coming Soon"
+]
 currentApp = App.Menu
 drawMenu()
 game.onPaint(function () {
@@ -400,39 +542,133 @@ game.onPaint(function () {
             let gy = mapY + Math.floor((mazeGoal.y / 120) * (mapH - 4)) + 1
             screen.fillRect(gx, gy, 2, 2, 2)
         }
+    } else if (currentApp == App.ShooterMaze) {
+        screen.print("Maze Shooter", 2, 2, 1)
+        screen.print("Enemy HP: " + mazeShooterEnemyHP, 2, 12, 1)
+        screen.print("Score:" + info.score(), 2, 22, 1)
     } else if (currentApp == App.ComingSoon) {
         screen.fill(9)
         screen.printCenter("COMING SOON", 60, 2)
         screen.printCenter("Press B", 90, 1)
     }
 })
+// prevent enemy walking through walls by reverting to previous pos
 game.onUpdate(function () {
-    // move is applied by engine on every frame; after a short delay we'll check collisions in next onUpdate
-    if (currentApp == App.Maze && mazePlayer) {
-        // store previous
-        prevX = mazePlayer.x
-        prevY = mazePlayer.y
+    if (currentApp != App.ShooterMaze) {
+        return
+    }
+    if (!(mazeShooterEnemy)) {
+        return
+    }
+    for (let g of mazeWalls) {
+        if (mazeShooterEnemy.overlapsWith(g)) {
+            mazeShooterEnemy.setPosition(mazeShooterPrevEnemyX, mazeShooterPrevEnemyY)
+            break;
+        }
     }
 })
-// ---------- Maze timer ----------
+// ---------- GAME UPDATE / WALL COLLISIONS ----------
+// store previous position for player in Maze and ShooterMaze
+game.onUpdate(function () {
+    if (currentApp == App.Maze && mazePlayer) {
+        prevX = mazePlayer.x
+        prevY = mazePlayer.y
+    } else if (currentApp == App.ShooterMaze && mazeShooterPlayer) {
+        prevX = mazeShooterPlayer.x
+        prevY = mazeShooterPlayer.y
+    }
+})
+// ---------- MAZE-SHOOTER: ENEMY SHOOTING ----------
+game.onUpdateInterval(1000, function () {
+    if (currentApp != App.ShooterMaze) {
+        return
+    }
+    if (!(mazeShooterEnemy) || !(mazeShooterPlayer)) {
+        return
+    }
+    // shoot towards player - scale velocity to speed (80)
+    dx = mazeShooterPlayer.x - mazeShooterEnemy.x
+    dy = mazeShooterPlayer.y - mazeShooterEnemy.y
+    mag = Math.sqrt(dx * dx + dy * dy)
+    speed = 80
+    if (mag > 0) {
+        vx = Math.round(dx / mag * speed)
+        vy = Math.round(dy / mag * speed)
+    }
+    h = sprites.createProjectileFromSprite(img`
+        . 1 . 
+        1 1 1 
+        . 1 . 
+        `, mazeShooterEnemy, vx, vy)
+    h.setKind(SpriteKind.EnemyBullet)
+})
+// maze timer
 game.onUpdateInterval(1000, function () {
     if (currentApp == App.Maze) {
         mazeTimer += 1
     }
 })
+// every 20ms check player overlap with walls and revert if needed
 game.onUpdateInterval(20, function () {
-    if (currentApp != App.Maze || !(mazePlayer)) {
-        return
-    }
-    // after movement, check overlap with any wall; if overlapping, revert to previous pos
-    for (let a of mazeWalls) {
-        if (mazePlayer.overlapsWith(a)) {
-            mazePlayer.setPosition(prevX, prevY)
-            return
+    if (currentApp == App.Maze && mazePlayer) {
+        for (let a of mazeWalls) {
+            if (mazePlayer.overlapsWith(a)) {
+                mazePlayer.setPosition(prevX, prevY)
+                return
+            }
+        }
+    } else if (currentApp == App.ShooterMaze && mazeShooterPlayer) {
+        for (let b of mazeWalls) {
+            if (mazeShooterPlayer.overlapsWith(b)) {
+                mazeShooterPlayer.setPosition(prevX, prevY)
+                return
+            }
         }
     }
 })
-// enemy AI: chase
+// ---------- FIX: make invisible enemy bullets visible in ORIGINAL SHOOTER ----------
+// This runs only during the normal Shooter mode and replaces fully-transparent projectile images
+game.onUpdateInterval(100, function () {
+    if (currentApp != App.Shooter) {
+        return
+    }
+    projs = sprites.allOfKind(SpriteKind.Projectile)
+    for (let v of projs) {
+        let j = v.image.width
+let k = v.image.height
+for (let yy2 = 0; yy2 <= k - 1; yy2++) {
+            for (let xx = 0; xx <= j - 1; xx++) {
+                if (v.image.getPixel(xx, yy2) != 0) {
+                    nonzero += 1
+                }
+            }
+        }
+        if (nonzero == 0) {
+            // replace invisible image with a small visible bullet (keeps same vx/vy)
+            v.setImage(img`
+                . 2 . 
+                2 2 2 
+                . 2 . 
+                `)
+        }
+    }
+})
+// ---------- MAZE-SHOOTER: ENEMY CHASE + WALL COLLISION ----------
+game.onUpdateInterval(300, function () {
+    if (currentApp != App.ShooterMaze) {
+        return
+    }
+    if (!(mazeShooterEnemy) || !(mazeShooterPlayer)) {
+        return
+    }
+    // store previous enemy pos for wall collision safety
+    mazeShooterPrevEnemyX = mazeShooterEnemy.x
+    mazeShooterPrevEnemyY = mazeShooterEnemy.y
+    // chase player
+    mazeShooterEnemy.vx = mazeShooterPlayer.x < mazeShooterEnemy.x ? -30 : 30
+    mazeShooterEnemy.vy = mazeShooterPlayer.y < mazeShooterEnemy.y ? -30 : 30
+})
+// enemy chase for normal shooter (kept)
 game.onUpdateInterval(200, function () {
     if (currentApp != App.Shooter) {
         return
